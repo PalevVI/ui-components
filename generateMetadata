@@ -71,7 +71,7 @@ export function generateMetadataFromOpenApi(openApi: OpenApiDocument): string {
       })
 
     declared.add(name)
-    output.push(`export const ${name} = ${code}`)
+    output.push(`export const ${name} = ${code} as const`)
     return flat
   }
 
