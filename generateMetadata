@@ -1,74 +1,63 @@
 export type SchemaNode = Record<string, any>
 export type OpenApiDocument = { components?: { schemas?: Record<string, SchemaNode> } }
 
-/** Маркер-заглушка, чтобы JSON.stringify сохранил ключ `"...Schema"`, который затем станет JS-спредом `...Schema` */
 const SPREAD_PLACEHOLDER = '__SPREAD__'
-
 const REF_RE = /\{\s*"\$ref":\s*"#\/components\/schemas\/([^"]+)"\s*\}/g
 const PROP_REF_RE = /"([^"]+)":\s*\{\s*"\$ref":\s*"#\/components\/schemas\/([^"]+)"\s*\}/g
 const ARR_REF_RE = /"([^"]+)":\s*\[([^\]]*\{\s*"\$ref":\s*"#\/components\/schemas\/[^"]+"\s*\}[^\]]*)\]/g
-const SPREAD_RE = new RegExp(
-  `"(\\.\\.\\.\\w+(?:\\.properties)?)": "${SPREAD_PLACEHOLDER}"|"(\\.\\.\\.\\w+\\.required)"`,
-  'g',
-)
-
-function flattenAllOf(node: unknown, schemas: Record<string, SchemaNode>): any {
-  if (!node || typeof node !== 'object') return node
-  if (Array.isArray(node)) return node.map((item) => flattenAllOf(item, schemas))
-
-  const { allOf, ...rest } = Object.fromEntries(
-    Object.entries(node).map(([k, v]) => [k, flattenAllOf(v, schemas)]),
-  )
-  if (!Array.isArray(allOf)) return rest
-
-  // Если allOf состоит из одной ссылки без соседних полей ({ allOf: [{ $ref }] }) — это просто { $ref }
-  if (allOf.length === 1 && allOf[0]?.$ref && Object.keys(rest).length === 0) {
-    return allOf[0]
-  }
-
-  const items = [...allOf, rest]
-  const shouldMergeProps = items.filter((x) => x.$ref || x.properties).length > 1
-  const shouldMergeReq = items.filter((x) => x.$ref || x.required).length > 1
-
-  const required: unknown[] = []
-  const properties: SchemaNode = {}
-  const merged: SchemaNode = {}
-
-  for (const item of items) {
-    const ref = item.$ref?.split('/').pop()
-    if (ref) {
-      merged[`...${ref}`] = SPREAD_PLACEHOLDER
-      const target = flattenAllOf(schemas[ref], schemas)
-      if (shouldMergeReq && target?.required) required.push(`...${ref}.required`)
-      if (shouldMergeProps && target?.properties) properties[`...${ref}.properties`] = SPREAD_PLACEHOLDER
-    } else {
-      const { required: req, properties: props, ...other } = item
-      Object.assign(merged, other)
-      if (req) required.push(...req)
-      if (props) Object.assign(properties, props)
-    }
-  }
-
-  return {
-    ...merged,
-    ...(required.length && { required }),
-    ...(Object.keys(properties).length && { properties }),
-  }
-}
+const SPREAD_RE = new RegExp(`"(\\.\\.\\.\\w+(?:\\.properties)?)": "${SPREAD_PLACEHOLDER}"|"(\\.\\.\\.\\w+\\.required)"`, 'g')
 
 export function generateMetadataFromOpenApi(openApi: OpenApiDocument): string {
   const schemas = openApi.components?.schemas ?? {}
-  const visited = new Set<string>()
+  const flatCache = new Map<string, SchemaNode>()
   const declared = new Set<string>()
   const output: string[] = []
 
-  const dfs = (name: string) => {
-    if (visited.has(name) || !schemas[name]) return
-    visited.add(name)
+  const flatten = (node: any): any => {
+    if (!node || typeof node !== 'object') return node
+    if (Array.isArray(node)) return node.map(flatten)
 
-    const json = JSON.stringify(flattenAllOf(schemas[name], schemas), null, 2)
+    const { allOf, ...rest } = Object.fromEntries(Object.entries(node).map(([k, v]) => [k, flatten(v)]))
+    if (!Array.isArray(allOf)) return rest
+    if (allOf.length === 1 && allOf[0]?.$ref && !Object.keys(rest).length) return allOf[0]
+
+    const items = [...allOf, rest]
+    const mergeProps = items.filter((x) => x.$ref || x.properties).length > 1
+    const mergeReq = items.filter((x) => x.$ref || x.required).length > 1
+    const required: unknown[] = []
+    const properties: SchemaNode = {}
+    const merged: SchemaNode = {}
+
+    for (const item of items) {
+      const ref = item.$ref?.split('/').pop()
+      if (ref) {
+        merged[`...${ref}`] = SPREAD_PLACEHOLDER
+        const target = dfs(ref)
+        if (mergeReq && target?.required) required.push(`...${ref}.required`)
+        if (mergeProps && target?.properties) properties[`...${ref}.properties`] = SPREAD_PLACEHOLDER
+      } else {
+        Object.assign(merged, item)
+        if (item.required) required.push(...item.required)
+        if (item.properties) Object.assign(properties, item.properties)
+      }
+    }
+
+    delete merged.required
+    delete merged.properties
+    if (required.length) merged.required = required
+    if (Object.keys(properties).length) merged.properties = properties
+    return merged
+  }
+
+  const dfs = (name: string): SchemaNode | undefined => {
+    if (flatCache.has(name) || !schemas[name]) return flatCache.get(name)
+    flatCache.set(name, schemas[name]) // Защита от цикла при рекурсивном flatten
+
+    const flat = flatten(schemas[name])
+    flatCache.set(name, flat)
+
+    const json = JSON.stringify(flat, null, 2)
     for (const [, dep] of json.matchAll(REF_RE)) dfs(dep!)
-    for (const [, dep] of json.matchAll(/\.\.\.(\w+)/g)) dfs(dep!)
 
     const code = json
       .replace(SPREAD_RE, '$1$2')
@@ -83,6 +72,7 @@ export function generateMetadataFromOpenApi(openApi: OpenApiDocument): string {
 
     declared.add(name)
     output.push(`export const ${name} = ${code}`)
+    return flat
   }
 
   Object.keys(schemas).forEach(dfs)
