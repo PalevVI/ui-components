@@ -21,17 +21,26 @@ function flattenAllOf(node: unknown, schemas: Record<string, SchemaNode>): any {
   )
   if (!Array.isArray(allOf)) return rest
 
+  // Если allOf состоит из одной ссылки без соседних полей ({ allOf: [{ $ref }] }) — это просто { $ref }
+  if (allOf.length === 1 && allOf[0]?.$ref && Object.keys(rest).length === 0) {
+    return allOf[0]
+  }
+
+  const items = [...allOf, rest]
+  const shouldMergeProps = items.filter((x) => x.$ref || x.properties).length > 1
+  const shouldMergeReq = items.filter((x) => x.$ref || x.required).length > 1
+
   const required: unknown[] = []
   const properties: SchemaNode = {}
   const merged: SchemaNode = {}
 
-  for (const item of [...allOf, rest]) {
+  for (const item of items) {
     const ref = item.$ref?.split('/').pop()
     if (ref) {
       merged[`...${ref}`] = SPREAD_PLACEHOLDER
       const target = flattenAllOf(schemas[ref], schemas)
-      if (target?.required) required.push(`...${ref}.required`)
-      if (target?.properties) properties[`...${ref}.properties`] = SPREAD_PLACEHOLDER
+      if (shouldMergeReq && target?.required) required.push(`...${ref}.required`)
+      if (shouldMergeProps && target?.properties) properties[`...${ref}.properties`] = SPREAD_PLACEHOLDER
     } else {
       const { required: req, properties: props, ...other } = item
       Object.assign(merged, other)
