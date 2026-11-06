@@ -1,36 +1,20 @@
-"SpecificationItemConsumerPrice" : {
-        "type" : "object",
-        "description" : "Цена позиции спецификации по потребителю",
-        "title" : "Цена позиции спецификации по потребителю",
-        "properties" : {
-          "consumerId" : {
-            "allOf" : [ {
-              "$ref" : "#/components/schemas/ConsumerId"
-            } ],
-            "description" : "Территориальный банк",
-            "title" : "Территориальный банк"
-          },
-          "consumerName" : {
-            "allOf" : [ {
-              "$ref" : "#/components/schemas/ConsumerDescription"
-            } ],
-            "description" : "Территориальный банк",
-            "title" : "Территориальный банк"
-          },
-          "priceExcludingVAT" : {
-            "$ref" : "#/components/schemas/PriceExcludingVat"
-          },
-          "priceIncludingVAT" : {
-            "$ref" : "#/components/schemas/PriceIncludingVat"
-          },
-          "currency" : {
-            "$ref" : "#/components/schemas/Currency"
-          },
-          "isApplicableToConsumer" : {
-            "type" : "boolean",
-            "description" : "Распространяется на ТБ",
-            "title" : "Распространяется на ТБ"
+"serviceLocationType" : {
+            "type" : "array",
+            "maxItems" : 100,
+            "items" : {
+              "allOf" : [ {
+                "$ref" : "#/components/schemas/ServiceLocationType"
+              } ]
+            }
           }
-        },
-        "additionalProperties" : false
-      },
+
+serviceLocationType: {
+			type: 'array',
+			maxItems: 100,
+			items: {
+				...ServiceLocationType,
+				properties: {
+					...ServiceLocationType.properties,
+				},
+			},
+		},
