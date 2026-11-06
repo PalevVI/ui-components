@@ -1,0 +1,65 @@
+export type SchemaNode = Record<string, any>
+export type OpenApiDocument = { components?: { schemas?: Record<string, SchemaNode> } }
+
+const REF_RE = /\{\s*"\$ref":\s*"#\/components\/schemas\/([^"]+)"\s*\}/g
+const PROP_REF_RE = /"([^"]+)":\s*\{\s*"\$ref":\s*"#\/components\/schemas\/([^"]+)"\s*\}/g
+const ARR_REF_RE = /"([^"]+)":\s*\[([^\]]*\{\s*"\$ref":\s*"#\/components\/schemas\/[^"]+"\s*\}[^\]]*)\]/g
+
+function flattenAllOf({ allOf, ...schema }: SchemaNode): SchemaNode {
+  if (!Array.isArray(allOf)) return schema
+  const required: unknown[] = []
+  const properties: SchemaNode = {}
+
+  for (const item of [...allOf, schema]) {
+    const ref = item.$ref?.split('/').pop()
+    if (ref) {
+      required.push(`...${ref}.required`)
+      properties[`...${ref}.properties`] = 1
+    } else {
+      const { required: req, properties: props, ...rest } = flattenAllOf(item)
+      Object.assign(schema, rest)
+      if (req) required.push(...req)
+      if (props) Object.assign(properties, props)
+    }
+  }
+
+  return {
+    type: 'object',
+    ...schema,
+    ...(required.length && { required }),
+    ...(Object.keys(properties).length && { properties }),
+  }
+}
+
+export function generateMetadataFromOpenApi(openApi: OpenApiDocument): string {
+  const schemas = openApi.components?.schemas ?? {}
+  const visited = new Set<string>()
+  const declared = new Set<string>()
+  const output: string[] = []
+
+  const dfs = (name: string) => {
+    if (visited.has(name) || !schemas[name]) return
+    visited.add(name)
+
+    const json = JSON.stringify(flattenAllOf(schemas[name]), null, 2)
+    for (const [, dep] of json.matchAll(REF_RE)) dfs(dep!)
+    for (const [, dep] of json.matchAll(/\.\.\.(\w+)\./g)) dfs(dep!)
+
+    const code = json
+      .replace(/"(\.\.\.\w+\.properties)": 1|"(.\.\.\w+\.required)"/g, '$1$2')
+      .replace(PROP_REF_RE, (_, k, t) =>
+        declared.has(t) ? `"${k}": ${t}` : `get "${k}"(): any { return ${t} }`,
+      )
+      .replace(ARR_REF_RE, (_, k, body: string) => {
+        const ready = [...body.matchAll(REF_RE)].every(([, t]) => declared.has(t!))
+        const items = body.replace(REF_RE, '$1')
+        return ready ? `"${k}": [${items}]` : `get "${k}"(): any { return [${items}] }`
+      })
+
+    declared.add(name)
+    output.push(`export const ${name} = ${code}`)
+  }
+
+  Object.keys(schemas).forEach(dfs)
+  return `${output.join('\n\n')}\n`
+}
